@@ -206,7 +206,7 @@ if __name__ == "__main__":
     
     # Test forward pass
     batch_size = 2
-    img_size = 256
+    img_size = 640
     test_input = torch.randn(batch_size, 3, img_size, img_size).to(device)
     
     with torch.no_grad():

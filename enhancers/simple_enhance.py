@@ -7,6 +7,7 @@
 import os
 import torch
 import numpy as np
+import cv2
 from PIL import Image
 from torchvision import transforms
 import time
@@ -16,11 +17,12 @@ from models.model import UP_Retinex
 from enhancers.adaptive_params import AdaptiveParameterAdjuster
 from enhancers.multi_scale import MultiScaleEnhancer
 from enhancers.content_aware import ContentAwareEnhancer
+from utils.letterbox import letterbox_tensor
 
 
 def load_image(image_path, max_size=None):
     """
-    加载并预处理图像
+    加载并预处理图像，使用letterbox策略保持宽高比
     
     Args:
         image_path (str): 图像路径
@@ -34,17 +36,27 @@ def load_image(image_path, max_size=None):
     img = Image.open(image_path).convert('RGB')
     original_size = img.size
     
-    # 如果指定了最大尺寸，则调整图像大小
-    if max_size is not None:
-        w, h = img.size
-        if max(w, h) > max_size:
-            scale = max_size / max(w, h)
-            new_w = int(w * scale)
-            new_h = int(h * scale)
-            img = img.resize((new_w, new_h), Image.BICUBIC)
-    
     # 转换为张量并归一化到[0, 1]
     img_tensor = transforms.ToTensor()(img)
+    
+    # 应用letterbox预处理
+    if max_size is not None:
+        img_tensor, _, _ = letterbox_tensor(
+            img_tensor, 
+            new_shape=max_size, 
+            auto=True, 
+            scaleup=False
+        )
+    else:
+        # 如果没有指定max_size，仍然应用letterbox以保持宽高比
+        # 但不进行放大
+        img_tensor, _, _ = letterbox_tensor(
+            img_tensor, 
+            new_shape=img_tensor.shape[1:],  # 保持原始尺寸
+            auto=True, 
+            scaleup=False
+        )
+    
     img_tensor = img_tensor.unsqueeze(0)  # 添加批次维度
     
     return img_tensor, original_size

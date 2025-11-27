@@ -285,7 +285,7 @@ if __name__ == "__main__":
     
     # Create dummy data
     batch_size = 2
-    img_size = 256
+    img_size = 640
     img_low = torch.rand(batch_size, 3, img_size, img_size).to(device) * 0.3  # Dark image
     img_enhanced = torch.rand(batch_size, 3, img_size, img_size).to(device) * 0.8  # Bright image
     illu_map = torch.rand(batch_size, 3, img_size, img_size).to(device) * 0.5 + 0.3  # Illumination

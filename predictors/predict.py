@@ -7,16 +7,22 @@ import os
 import argparse
 import torch
 import numpy as np
+import cv2
+import sys
 from PIL import Image
 from torchvision import transforms
 import time
 
+# Add the project root directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from models.model import UP_Retinex
+from utils.letterbox import letterbox_tensor
 
 
 def load_image(image_path, max_size=None):
     """
-    Load and preprocess image
+    Load and preprocess image using letterbox strategy
     
     Args:
         image_path (str): Path to image
@@ -30,17 +36,27 @@ def load_image(image_path, max_size=None):
     img = Image.open(image_path).convert('RGB')
     original_size = img.size
     
-    # Resize if max_size is specified
-    if max_size is not None:
-        w, h = img.size
-        if max(w, h) > max_size:
-            scale = max_size / max(w, h)
-            new_w = int(w * scale)
-            new_h = int(h * scale)
-            img = img.resize((new_w, new_h), Image.BICUBIC)
-    
     # Convert to tensor and normalize to [0, 1]
     img_tensor = transforms.ToTensor()(img)
+    
+    # Apply letterbox preprocessing if max_size is specified
+    if max_size is not None:
+        img_tensor, _, _ = letterbox_tensor(
+            img_tensor, 
+            new_shape=max_size, 
+            auto=True, 
+            scaleup=False
+        )
+    else:
+        # If no max_size specified, still apply letterbox to maintain aspect ratio
+        # but without scaling up
+        img_tensor, _, _ = letterbox_tensor(
+            img_tensor, 
+            new_shape=img_tensor.shape[1:],  # Keep original size
+            auto=True, 
+            scaleup=False
+        )
+    
     img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
     
     return img_tensor, original_size

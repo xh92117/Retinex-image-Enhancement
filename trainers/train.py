@@ -4,6 +4,7 @@ Training Script
 """
 
 import os
+import sys
 import argparse
 import time
 from datetime import datetime
@@ -11,6 +12,9 @@ import torch
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+
+# Add the project root directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.model import UP_Retinex
 from losses.loss import TotalLoss
@@ -277,7 +281,7 @@ def main():
                         help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='Batch size')
-    parser.add_argument('--image_size', type=int, default=256,
+    parser.add_argument('--image_size', type=int, default=640,
                         help='Image size for training crops')
     parser.add_argument('--num_workers', type=int, default=4,
                         help='Number of dataloader workers')

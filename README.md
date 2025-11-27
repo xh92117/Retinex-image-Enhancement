@@ -95,7 +95,7 @@ python trainers/train.py --train_dir ./data/train --save_dir ./checkpoints --num
 - `--save_dir`：保存检查点的目录(默认：`./checkpoints`)
 - `--num_epochs`：训练轮数(默认：100)
 - `--batch_size`：批处理大小(默认：8)
-- `--image_size`：训练裁剪的图像尺寸(默认：256)
+- `--image_size`：训练裁剪的图像尺寸(默认：640)
 - `--lr`：学习率(默认：1e-4)
 - `--weight_decay`：权重衰减(默认：1e-5)
 

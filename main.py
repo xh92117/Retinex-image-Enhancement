@@ -47,7 +47,7 @@ def main():
                         help='训练轮数')
     parser.add_argument('--batch_size', type=int, default=8,
                         help='批处理大小')
-    parser.add_argument('--image_size', type=int, default=256,
+    parser.add_argument('--image_size', type=int, default=640,
                         help='训练时裁剪的图像尺寸')
     parser.add_argument('--lr', type=float, default=1e-4,
                         help='学习率')
@@ -87,6 +87,8 @@ def main():
                         help='学习率衰减步长')
     parser.add_argument('--lr_decay_gamma', type=float, default=0.5,
                         help='学习率衰减因子')
+    parser.add_argument('--save_freq', type=int, default=10,
+                        help='保存检查点的频率(每N个epoch)')
     
     args = parser.parse_args()
     

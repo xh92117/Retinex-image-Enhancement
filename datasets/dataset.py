@@ -4,11 +4,18 @@ Dataset Implementation
 """
 
 import os
+import cv2
+import numpy as np
 from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 import random
+
+# Add letterbox utility
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.letterbox import letterbox_tensor
 
 
 class LowLightDataset(Dataset):
@@ -24,7 +31,7 @@ class LowLightDataset(Dataset):
     """
     def __init__(self, 
                  image_dir, 
-                 image_size=256, 
+                 image_size=640, 
                  random_crop=True,
                  augment=True):
         """
@@ -76,48 +83,33 @@ class LowLightDataset(Dataset):
         img_path = self.image_files[idx]
         img = Image.open(img_path).convert('RGB')
         
-        # Get original size
-        w, h = img.size
+        # Convert PIL to tensor
+        img_tensor = transforms.ToTensor()(img)
         
-        # Resize if image is too small
-        if min(w, h) < self.image_size:
-            scale = self.image_size / min(w, h)
-            new_w = int(w * scale)
-            new_h = int(h * scale)
-            img = img.resize((new_w, new_h), Image.BICUBIC)
-            w, h = new_w, new_h
+        # Apply letterbox preprocessing to maintain aspect ratio
+        img_tensor, _, _ = letterbox_tensor(
+            img_tensor, 
+            new_shape=self.image_size, 
+            auto=True, 
+            scaleup=True
+        )
         
-        # Crop
-        if self.random_crop:
-            # Random crop
-            x = random.randint(0, w - self.image_size)
-            y = random.randint(0, h - self.image_size)
-        else:
-            # Center crop
-            x = (w - self.image_size) // 2
-            y = (h - self.image_size) // 2
-        
-        img = img.crop((x, y, x + self.image_size, y + self.image_size))
-        
-        # Data augmentation
+        # Data augmentation (only applied to training data)
         if self.augment:
             # Random horizontal flip
             if random.random() > 0.5:
-                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+                img_tensor = torch.flip(img_tensor, dims=[2])
             
             # Random vertical flip
             if random.random() > 0.5:
-                img = img.transpose(Image.FLIP_TOP_BOTTOM)
+                img_tensor = torch.flip(img_tensor, dims=[1])
             
             # Random rotation (90, 180, 270 degrees)
             if random.random() > 0.5:
-                angle = random.choice([90, 180, 270])
-                img = img.rotate(angle)
+                angle = random.choice([1, 2, 3])  # 1=90°, 2=180°, 3=270°
+                img_tensor = torch.rot90(img_tensor, k=angle, dims=[1, 2])
         
-        # Convert to tensor and normalize to [0, 1]
-        img = transforms.ToTensor()(img)
-        
-        return img
+        return img_tensor
 
 
 class LowLightTestDataset(Dataset):
@@ -168,27 +160,36 @@ class LowLightTestDataset(Dataset):
         img_path = self.image_files[idx]
         img = Image.open(img_path).convert('RGB')
         
-        # Resize if max_size is specified
-        if self.max_size is not None:
-            w, h = img.size
-            if max(w, h) > self.max_size:
-                scale = self.max_size / max(w, h)
-                new_w = int(w * scale)
-                new_h = int(h * scale)
-                img = img.resize((new_w, new_h), Image.BICUBIC)
+        # Convert PIL to tensor
+        img_tensor = transforms.ToTensor()(img)
         
-        # Convert to tensor and normalize to [0, 1]
-        img = transforms.ToTensor()(img)
+        # Apply letterbox preprocessing if max_size is specified
+        if self.max_size is not None:
+            img_tensor, _, _ = letterbox_tensor(
+                img_tensor, 
+                new_shape=self.max_size, 
+                auto=True, 
+                scaleup=False
+            )
+        else:
+            # If no max_size specified, still apply letterbox to maintain aspect ratio
+            # but without scaling up
+            img_tensor, _, _ = letterbox_tensor(
+                img_tensor, 
+                new_shape=img_tensor.shape[1:],  # Keep original size
+                auto=True, 
+                scaleup=False
+            )
         
         # Get image filename
         img_name = os.path.basename(img_path)
         
-        return img, img_name
+        return img_tensor, img_name
 
 
 def get_train_dataloader(image_dir, 
                          batch_size=8, 
-                         image_size=256,
+                         image_size=640,
                          num_workers=4,
                          shuffle=True):
     """
@@ -277,7 +278,7 @@ if __name__ == "__main__":
     train_loader = get_train_dataloader(
         image_dir=image_dir,
         batch_size=4,
-        image_size=256,
+        image_size=640,
         num_workers=0  # Use 0 for testing
     )
     
