@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# C extensions
+*.so
+
 # Distribution / packaging
 .Python
 build/
@@ -89,14 +92,12 @@ ipython_config.py
 #   However, in case of collaboration, if having platform-specific dependencies or dependencies
 #   having no cross-platform support, pipenv may install dependencies that don't work, or not
 #   install all needed dependencies.
-Pipfile.lock
+#Pipfile.lock
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-poetry.lock
+#   This is especially helpful in specifying exact versions of dependencies for reproducible builds.
+#poetry.lock
 
 # pdm
 #   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
@@ -122,8 +123,8 @@ celerybeat.pid
 env/
 venv/
 ENV/
-env.bak
-venv.bak
+env.bak/
+venv.bak/
 
 # Spyder project settings
 .spyderproject
@@ -143,7 +144,7 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# pytype
+# pytype static type analyzer
 .pytype/
 
 # Cython debug symbols
@@ -156,26 +157,17 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# VS Code
-.vscode/
+# Checkpoints and temporary files
+checkpoints/
+*.pth
+*.ckpt
+*.pt
 
-# Checkpoints
-.checkpoints/
+# Results and outputs
+results/
+output/
+data/output/
 
-# Data files
-data/input/*.jpg
-data/train/*.jpg
-data/output/*.jpg
-data/output/*.png
-
-# Log files
+# Logs
 *.log
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+logs/
