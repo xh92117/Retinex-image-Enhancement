@@ -16,7 +16,7 @@ from tqdm import tqdm
 # Add the project root directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.model import UP_Retinex
+from models.model import MultiScaleUP_Retinex
 from losses.loss import TotalLoss
 from datasets.dataset import get_train_dataloader
 
@@ -45,7 +45,9 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writ
         'exposure': 0.0,
         'smoothness': 0.0,
         'color': 0.0,
-        'spatial': 0.0
+        'spatial': 0.0,
+        'decouple': 0.0,
+        'perceptual': 0.0
     }
     
     num_batches = len(dataloader)
@@ -61,10 +63,10 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writ
         optimizer.zero_grad()
         
         # Forward pass
-        img_enhanced, illu_map = model(img_low)
+        img_enhanced, reflectance, illu_map = model(img_low)
         
         # Compute loss
-        loss, loss_dict = criterion(img_low, img_enhanced, illu_map)
+        loss, loss_dict = criterion(img_low, img_enhanced, illu_map, reflectance)
         
         # Backward pass
         loss.backward()
@@ -83,7 +85,9 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writ
         pbar.set_postfix({
             'loss': f"{loss_dict['total']:.4f}",
             'exp': f"{loss_dict['exposure']:.4f}",
-            'smooth': f"{loss_dict['smoothness']:.4f}"
+            'smooth': f"{loss_dict['smoothness']:.4f}",
+            'decouple': f"{loss_dict['decouple']:.4f}",
+            'perceptual': f"{loss_dict['perceptual']:.4f}"
         })
         
         # Log to TensorBoard (every 100 batches)
@@ -170,7 +174,7 @@ def train(args):
     
     # Create model
     print("Creating model...")
-    model = UP_Retinex().to(device)
+    model = MultiScaleUP_Retinex().to(device)
     print(f"Number of parameters: {model.get_num_params():,}")
     
     # Create loss function
@@ -178,7 +182,9 @@ def train(args):
         weight_exp=args.weight_exp,
         weight_smooth=args.weight_smooth,
         weight_col=args.weight_col,
-        weight_spa=args.weight_spa
+        weight_spa=args.weight_spa,
+        weight_decouple=args.weight_decouple,
+        weight_perceptual=args.weight_perceptual
     ).to(device)
     
     # Create optimizer
@@ -305,6 +311,10 @@ def main():
                         help='Weight for color loss')
     parser.add_argument('--weight_spa', type=float, default=1.0,
                         help='Weight for spatial consistency loss')
+    parser.add_argument('--weight_decouple', type=float, default=0.1,
+                        help='Weight for illumination-reflectance decoupling loss')
+    parser.add_argument('--weight_perceptual', type=float, default=1.0,
+                        help='Weight for perceptual loss')
     
     # Checkpoint arguments
     parser.add_argument('--resume', type=str, default=None,
