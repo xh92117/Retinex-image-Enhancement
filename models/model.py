@@ -265,10 +265,14 @@ class MultiScaleUP_Retinex(nn.Module):
         return enhanced, reflectance, illu
 
 
+# 为保持向后兼容性，添加别名
+UP_Retinex = MultiScaleUP_Retinex
+
+
 if __name__ == "__main__":
     # Test the model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = UP_Retinex().to(device)
+    model = MultiScaleUP_Retinex().to(device)
     
     # Print model info
     print("=" * 60)
@@ -291,3 +295,29 @@ if __name__ == "__main__":
     print("=" * 60)
     print("Model test passed!")
 
+
+if __name__ == "__main__":
+    # Test the model
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = MultiScaleUP_Retinex().to(device)
+    
+    # Print model info
+    print("=" * 60)
+    print("UP-Retinex Model")
+    print("=" * 60)
+    print(f"Number of parameters: {model.get_num_params():,}")
+    print("=" * 60)
+    
+    # Test forward pass
+    batch_size = 2
+    img_size = 640
+    test_input = torch.randn(batch_size, 3, img_size, img_size).to(device)
+    
+    with torch.no_grad():
+        enhanced, illumination = model(test_input)
+    
+    print(f"\nInput shape: {test_input.shape}")
+    print(f"Enhanced output shape: {enhanced.shape}")
+    print(f"Illumination map shape: {illumination.shape}")
+    print("=" * 60)
+    print("Model test passed!")
