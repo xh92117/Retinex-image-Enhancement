@@ -97,6 +97,67 @@ class EnhancedFAM(nn.Module):
         return out
 
 
+class ResBlock(nn.Module):
+    """
+    Residual Block with downsampling capability
+    """
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        
+        # 如果输入和输出通道数不同，或者需要下采样，则添加shortcut连接
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        identity = x
+        
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        # 添加shortcut连接
+        identity = self.shortcut(x)
+        out += identity
+        out = self.relu(out)
+        
+        return out
+
+
+class UpBlock(nn.Module):
+    """
+    Upsampling Block for decoder path
+    """
+    def __init__(self, in_channels, out_channels):
+        super(UpBlock, self).__init__()
+        # 使用转置卷积进行上采样
+        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
+        self.conv = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        x = self.up(x)
+        x = self.conv(x)
+        return x
+
+
 class ResidualIENet(nn.Module):
     """
     Residual Illumination Estimation Network (IENet) with Improved Decomposition
@@ -269,31 +330,9 @@ class MultiScaleUP_Retinex(nn.Module):
 UP_Retinex = MultiScaleUP_Retinex
 
 
-if __name__ == "__main__":
-    # Test the model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = MultiScaleUP_Retinex().to(device)
-    
-    # Print model info
-    print("=" * 60)
-    print("UP-Retinex Model")
-    print("=" * 60)
-    print(f"Number of parameters: {model.get_num_params():,}")
-    print("=" * 60)
-    
-    # Test forward pass
-    batch_size = 2
-    img_size = 640
-    test_input = torch.randn(batch_size, 3, img_size, img_size).to(device)
-    
-    with torch.no_grad():
-        enhanced, illumination = model(test_input)
-    
-    print(f"\nInput shape: {test_input.shape}")
-    print(f"Enhanced output shape: {enhanced.shape}")
-    print(f"Illumination map shape: {illumination.shape}")
-    print("=" * 60)
-    print("Model test passed!")
+def count_parameters(model):
+    """Count the number of trainable parameters in a model"""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 if __name__ == "__main__":
@@ -305,7 +344,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("UP-Retinex Model")
     print("=" * 60)
-    print(f"Number of parameters: {model.get_num_params():,}")
+    print(f"Number of parameters: {count_parameters(model):,}")
     print("=" * 60)
     
     # Test forward pass
@@ -314,10 +353,11 @@ if __name__ == "__main__":
     test_input = torch.randn(batch_size, 3, img_size, img_size).to(device)
     
     with torch.no_grad():
-        enhanced, illumination = model(test_input)
+        enhanced, reflectance, illumination = model(test_input)
     
     print(f"\nInput shape: {test_input.shape}")
     print(f"Enhanced output shape: {enhanced.shape}")
+    print(f"Reflectance map shape: {reflectance.shape}")
     print(f"Illumination map shape: {illumination.shape}")
     print("=" * 60)
     print("Model test passed!")
