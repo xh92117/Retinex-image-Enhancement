@@ -67,7 +67,7 @@ def save_image(tensor, save_path):
     Save tensor as image
     
     Args:
-        tensor (torch.Tensor): Image tensor [1, 3, H, W] or [3, H, W]
+        tensor (torch.Tensor): Image tensor [1, C, H, W] 或 [C, H, W]
         save_path (str): Path to save image
     """
     # Remove batch dimension if present
@@ -76,11 +76,22 @@ def save_image(tensor, save_path):
     
     # Convert to numpy array
     img_np = tensor.cpu().detach().numpy()
-    img_np = np.transpose(img_np, (1, 2, 0))  # [H, W, C]
     
-    # Clip to [0, 1] and convert to [0, 255]
-    img_np = np.clip(img_np, 0, 1)
-    img_np = (img_np * 255).astype(np.uint8)
+    # Handle different channel counts
+    if img_np.shape[0] == 1:
+        # Single channel image
+        img_np = img_np.squeeze(0)  # [H, W]
+        # Clip to [0, 1] and convert to [0, 255]
+        img_np = np.clip(img_np, 0, 1)
+        img_np = (img_np * 255).astype(np.uint8)
+        # Convert to RGB format
+        img_np = np.stack([img_np, img_np, img_np], axis=2)  # [H, W, 3]
+    else:
+        # Multi-channel image (usually 3 channels)
+        img_np = np.transpose(img_np, (1, 2, 0))  # [H, W, C]
+        # Clip to [0, 1] and convert to [0, 255]
+        img_np = np.clip(img_np, 0, 1)
+        img_np = (img_np * 255).astype(np.uint8)
     
     # Save image
     img = Image.fromarray(img_np)

@@ -67,7 +67,7 @@ def save_image(tensor, save_path):
     保存张量为图像
     
     Args:
-        tensor (torch.Tensor): 图像张量 [1, 3, H, W] 或 [3, H, W]
+        tensor (torch.Tensor): 图像张量 [1, C, H, W] 或 [C, H, W]
         save_path (str): 保存图像的路径
     """
     # 如果有批次维度则移除
@@ -76,11 +76,22 @@ def save_image(tensor, save_path):
     
     # 转换为numpy数组
     img_np = tensor.cpu().detach().numpy()
-    img_np = np.transpose(img_np, (1, 2, 0))  # [H, W, C]
     
-    # 裁剪到[0, 1]并转换为[0, 255]
-    img_np = np.clip(img_np, 0, 1)
-    img_np = (img_np * 255).astype(np.uint8)
+    # 处理不同的通道数
+    if img_np.shape[0] == 1:
+        # 单通道图像
+        img_np = img_np.squeeze(0)  # [H, W]
+        # 裁剪到[0, 1]并转换为[0, 255]
+        img_np = np.clip(img_np, 0, 1)
+        img_np = (img_np * 255).astype(np.uint8)
+        # 转换为RGB格式
+        img_np = np.stack([img_np, img_np, img_np], axis=2)  # [H, W, 3]
+    else:
+        # 多通道图像（通常是3通道）
+        img_np = np.transpose(img_np, (1, 2, 0))  # [H, W, C]
+        # 裁剪到[0, 1]并转换为[0, 255]
+        img_np = np.clip(img_np, 0, 1)
+        img_np = (img_np * 255).astype(np.uint8)
     
     # 保存图像
     img = Image.fromarray(img_np)

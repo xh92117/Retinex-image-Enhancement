@@ -368,8 +368,8 @@ python datasets/dataset.py ./data/train
 ### AttributeError: 'Namespace' object has no attribute 'weight_xxx'
 如果遇到参数访问错误，这是由于命令行参数缺失导致的。该问题已在最新版本中修复，通过为所有损失函数权重参数添加默认值处理，提高了代码的健壮性。
 
-### ValueError: too many values to unpack (expected 2)
-如果在使用训练好的模型进行图像增强时遇到此错误，这是由于模型返回值数量与代码期望不匹配导致的。该问题已在最新版本中修复，确保模型返回的增强图像、反射率图和光照图能够被正确解包。
+### TensorFlow警告信息
+如果看到类似于"Unable to register cuFFT factory"、"Unable to register cuDNN factory"或"Unable to register cuBLAS factory"的警告信息，这些是TensorFlow库的初始化警告，通常不会影响程序的正常运行。这些警告是由于TensorFlow在CUDA环境中重复注册工厂导致的，可以安全忽略。
 
 ## 📚 参考文献
 
@@ -388,4 +388,4 @@ python datasets/dataset.py ./data/train
 - 修复了IlluminationReflectanceDecouplingLoss中光照图和反射率图通道数不匹配导致的RuntimeError问题
 - 为所有损失函数权重参数添加了默认值处理，提高代码健壮性
 - 更新了故障排除部分，添加了常见错误的解决方案
-- 修复了模型返回值解包错误(ValueError: too many values to unpack)，确保增强模块能正确处理模型返回的增强图像、反射率图和光照图
+- 修复了保存单通道图像(如illu_map)时的TypeError问题，确保能够正确处理不同通道数的图像张量
