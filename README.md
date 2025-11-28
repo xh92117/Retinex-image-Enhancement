@@ -362,6 +362,12 @@ python datasets/dataset.py ./data/train
 - 检查输入图像格式是否为支持的格式（JPEG, PNG等）
 - 多尺度增强和内容感知增强可能需要更多的计算资源，如果遇到性能问题，可以尝试使用letterbox策略并设置合适的尺寸：`--letterbox --image_size 512`
 
+### RuntimeError:维度不匹配问题
+如果遇到类似"Expected size for first two dimensions of batch2 tensor to be: [1, 409600] but got: [1, 1228800]"的错误，这是由于光照图（单通道）和反射率图（三通道）之间的维度不匹配导致的。该问题已在最新版本中修复，确保使用最新的代码版本即可。
+
+### AttributeError: 'Namespace' object has no attribute 'weight_xxx'
+如果遇到参数访问错误，这是由于命令行参数缺失导致的。该问题已在最新版本中修复，通过为所有损失函数权重参数添加默认值处理，提高了代码的健壮性。
+
 ## 📚 参考文献
 
 - Retinex理论：Land, E. H. (1977). 视网膜理论与色彩视觉。《科学美国人》。
@@ -371,3 +377,11 @@ python datasets/dataset.py ./data/train
 
 如果您在研究中使用此代码，请引用：
 ```
+```
+
+## 📅 更新日志
+
+### v1.1.0 (2024-XX-XX)
+- 修复了IlluminationReflectanceDecouplingLoss中光照图和反射率图通道数不匹配导致的RuntimeError问题
+- 为所有损失函数权重参数添加了默认值处理，提高代码健壮性
+- 更新了故障排除部分，添加了常见错误的解决方案

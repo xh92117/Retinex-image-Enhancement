@@ -281,28 +281,52 @@ class IlluminationReflectanceDecouplingLoss(nn.Module):
         Returns:
             loss (torch.Tensor): Scalar loss value
         """
-        B, C, H, W = illu_map.shape
+        B, C_illu, H, W = illu_map.shape
+        _, C_refl, _, _ = reflectance.shape
         
         # Reshape to [B, C, H*W]
-        illu_flat = illu_map.view(B, C, -1)
-        refl_flat = reflectance.view(B, C, -1)
+        # Handle different channel dimensions between illumination (1 channel) and reflectance (3 channels)
+        illu_flat = illu_map.view(B, C_illu, -1)
+        refl_flat = reflectance.view(B, C_refl, -1)
         
         # Compute global means
-        illu_mean = torch.mean(illu_flat, dim=2, keepdim=True)  # [B, C, 1]
-        refl_mean = torch.mean(refl_flat, dim=2, keepdim=True)  # [B, C, 1]
+        illu_mean = torch.mean(illu_flat, dim=2, keepdim=True)  # [B, C_illu, 1]
+        refl_mean = torch.mean(refl_flat, dim=2, keepdim=True)  # [B, C_refl, 1]
         
         # Center the data
         illu_centered = illu_flat - illu_mean
         refl_centered = refl_flat - refl_mean
         
-        # Compute covariance matrix
-        covariance = torch.bmm(illu_centered, refl_centered.transpose(1, 2)) / (H * W - 1)
+        # For covariance computation, we need to handle different channel counts
+        # We compute the covariance between each illumination channel and each reflectance channel
+        if C_illu == C_refl:
+            # Same number of channels - direct covariance computation
+            covariance = torch.bmm(illu_centered, refl_centered.transpose(1, 2)) / (H * W - 1)
+        else:
+            # Different number of channels - compute cross-covariance
+            # Expand illumination to match reflectance channels for meaningful comparison
+            if C_illu == 1 and C_refl == 3:
+                # Common case: single-channel illumination vs 3-channel reflectance
+                # Replicate illumination channel to match reflectance
+                illu_replicated = illu_flat.expand(B, C_refl, -1)
+                covariance = torch.bmm(illu_replicated, refl_centered.transpose(1, 2)) / (H * W - 1)
+            else:
+                # General case: compute covariance for compatible dimensions
+                # Take the first channel of illumination and all channels of reflectance
+                illu_first_channel = illu_flat[:, :1, :]  # [B, 1, H*W]
+                covariance = torch.bmm(illu_first_channel, refl_centered.transpose(1, 2)) / (H * W - 1)
         
         # Frobenius norm of covariance (independence constraint)
         cov_loss = torch.norm(covariance, p='fro') ** 2
         
-        # Mean difference constraint
-        mean_diff_loss = F.mse_loss(illu_mean, refl_mean)
+        # Mean difference constraint - only compare compatible channels
+        if C_illu == C_refl:
+            mean_diff_loss = F.mse_loss(illu_mean, refl_mean)
+        else:
+            # For different channel counts, compare illumination with mean of reflectance
+            refl_mean_avg = torch.mean(refl_mean, dim=1, keepdim=True)  # [B, 1, 1]
+            illu_mean_avg = torch.mean(illu_mean, dim=1, keepdim=True)   # [B, 1, 1]
+            mean_diff_loss = F.mse_loss(illu_mean_avg, refl_mean_avg)
         
         # Total loss
         loss = cov_loss + self.lambda_val * mean_diff_loss

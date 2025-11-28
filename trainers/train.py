@@ -178,13 +178,21 @@ def train(args):
     print(f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
     # Create loss function
+    # Handle potential missing arguments with defaults
+    weight_exp = getattr(args, 'weight_exp', 10.0)
+    weight_smooth = getattr(args, 'weight_smooth', 1.0)
+    weight_col = getattr(args, 'weight_col', 0.5)
+    weight_spa = getattr(args, 'weight_spa', 1.0)
+    weight_decouple = getattr(args, 'weight_decouple', 0.1)
+    weight_perceptual = getattr(args, 'weight_perceptual', 1.0)
+    
     criterion = TotalLoss(
-        weight_exp=args.weight_exp,
-        weight_smooth=args.weight_smooth,
-        weight_col=args.weight_col,
-        weight_spa=args.weight_spa,
-        weight_decouple=args.weight_decouple,
-        weight_perceptual=args.weight_perceptual
+        weight_exp=weight_exp,
+        weight_smooth=weight_smooth,
+        weight_col=weight_col,
+        weight_spa=weight_spa,
+        weight_decouple=weight_decouple,
+        weight_perceptual=weight_perceptual
     ).to(device)
     
     # Create optimizer
