@@ -368,6 +368,9 @@ python datasets/dataset.py ./data/train
 ### AttributeError: 'Namespace' object has no attribute 'weight_xxx'
 如果遇到参数访问错误，这是由于命令行参数缺失导致的。该问题已在最新版本中修复，通过为所有损失函数权重参数添加默认值处理，提高了代码的健壮性。
 
+### ValueError: too many values to unpack (expected 2)
+如果在使用训练好的模型进行图像增强时遇到此错误，这是由于模型返回值数量与代码期望不匹配导致的。该问题已在最新版本中修复，确保模型返回的增强图像、反射率图和光照图能够被正确解包。
+
 ## 📚 参考文献
 
 - Retinex理论：Land, E. H. (1977). 视网膜理论与色彩视觉。《科学美国人》。
@@ -385,3 +388,4 @@ python datasets/dataset.py ./data/train
 - 修复了IlluminationReflectanceDecouplingLoss中光照图和反射率图通道数不匹配导致的RuntimeError问题
 - 为所有损失函数权重参数添加了默认值处理，提高代码健壮性
 - 更新了故障排除部分，添加了常见错误的解决方案
+- 修复了模型返回值解包错误(ValueError: too many values to unpack)，确保增强模块能正确处理模型返回的增强图像、反射率图和光照图

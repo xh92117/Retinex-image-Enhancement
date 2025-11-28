@@ -139,7 +139,7 @@ class AdaptiveParameterAdjuster:
         
         # 模型推理
         with torch.no_grad():
-            enhanced_img, illu_map = model(image_tensor)
+            enhanced_img, reflectance, illu_map = model(image_tensor)
         
         # 应用参数调整（这里可以根据需要进一步实现具体的参数应用逻辑）
         # 目前只是返回原始结果，但在实际应用中可以根据params调整后处理

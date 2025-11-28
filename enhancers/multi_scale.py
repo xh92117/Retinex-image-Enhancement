@@ -80,7 +80,7 @@ class MultiScaleEnhancer:
         
         # 模型推理
         with torch.no_grad():
-            enhanced_img, illu_map = model(image_tensor)
+            enhanced_img, reflectance, illu_map = model(image_tensor)
         
         # 根据多尺度特征调整增强效果
         # 这里是一个简化的实现，实际应用中可以根据不同尺度的特征进行更复杂的调整

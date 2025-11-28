@@ -112,7 +112,7 @@ class ContentAwareEnhancer:
         
         # 模型推理
         with torch.no_grad():
-            enhanced_img, illu_map = model(image_tensor)
+            enhanced_img, reflectance, illu_map = model(image_tensor)
         
         # 根据注意力图调整增强强度
         # 在高注意力区域应用更强的增强
