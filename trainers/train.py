@@ -175,7 +175,7 @@ def train(args):
     # Create model
     print("Creating model...")
     model = MultiScaleUP_Retinex().to(device)
-    print(f"Number of parameters: {model.get_num_params():,}")
+    print(f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
     # Create loss function
     criterion = TotalLoss(

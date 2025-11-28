@@ -267,7 +267,7 @@ def main():
     model.eval()
     
     print(f"Loaded checkpoint from epoch {checkpoint['epoch']}")
-    print(f"Number of parameters: {model.get_num_params():,}")
+    print(f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
     # Check if input is a file or directory
     if os.path.isfile(args.input):
