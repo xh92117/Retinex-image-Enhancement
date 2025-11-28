@@ -12,6 +12,8 @@ import torch
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import csv
 
 # Add the project root directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -121,11 +123,6 @@ def save_checkpoint(model, optimizer, epoch, save_dir, is_best=False):
         'optimizer_state_dict': optimizer.state_dict(),
     }
     
-    # Save regular checkpoint
-    checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pth')
-    torch.save(checkpoint, checkpoint_path)
-    print(f"Saved checkpoint: {checkpoint_path}")
-    
     # Save as best model
     if is_best:
         best_path = os.path.join(save_dir, 'best_model.pth')
@@ -135,6 +132,7 @@ def save_checkpoint(model, optimizer, epoch, save_dir, is_best=False):
     # Save as latest model (overwrite)
     latest_path = os.path.join(save_dir, 'latest_model.pth')
     torch.save(checkpoint, latest_path)
+    print(f"Saved latest model: {latest_path}")
 
 
 def load_checkpoint(model, optimizer, checkpoint_path):
@@ -230,6 +228,17 @@ def train(args):
     writer = SummaryWriter(log_dir)
     print(f"TensorBoard logs: {log_dir}")
     
+    # Initialize lists to store loss history for visualization
+    loss_history = {
+        'total': [],
+        'exposure': [],
+        'smoothness': [],
+        'color': [],
+        'spatial': [],
+        'decouple': [],
+        'perceptual': []
+    }
+    
     # Training loop
     print("=" * 60)
     print("Starting training...")
@@ -245,9 +254,17 @@ def train(args):
             model, train_loader, criterion, optimizer, device, epoch, writer
         )
         
+        # Save sample visualization every 10 epochs
+        if epoch % 10 == 0:
+            save_sample_visualizations(model, train_loader, device, epoch, args.save_dir)
+        
         # Update learning rate
         scheduler.step()
         current_lr = optimizer.param_groups[0]['lr']
+        
+        # Store loss history for visualization
+        for key, value in avg_loss_dict.items():
+            loss_history[key].append(value)
         
         # Print epoch summary
         epoch_time = time.time() - epoch_start_time
@@ -268,13 +285,19 @@ def train(args):
         if is_best:
             best_loss = avg_loss_dict['total']
         
-        if (epoch + 1) % args.save_freq == 0 or is_best:
-            save_checkpoint(model, optimizer, epoch, args.save_dir, is_best)
+        # Always save the latest model and save best model when improved
+        save_checkpoint(model, optimizer, epoch, args.save_dir, is_best)
         
         print("=" * 60)
     
     # Close TensorBoard writer
     writer.close()
+    
+    # Save loss history for visualization
+    save_loss_curves(loss_history, args.save_dir)
+    
+    # Save results to CSV
+    save_results_to_csv(loss_history, args.save_dir)
     
     print("Training completed!")
     print(f"Best loss: {best_loss:.6f}")
@@ -347,3 +370,131 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+def save_sample_visualizations(model, train_loader, device, epoch, save_dir):
+    """
+    Save sample visualizations of low-light and enhanced images
+    
+    Args:
+        model: Trained model
+        train_loader: Training data loader
+        device: Device to run inference on
+        epoch: Current epoch number
+        save_dir: Directory to save visualizations
+    """
+    import torchvision.utils as vutils
+    from utils.utils import visualize_results
+    
+    model.eval()  # Set model to evaluation mode
+    
+    # Create directory for visualizations
+    vis_dir = os.path.join(save_dir, 'visualizations')
+    os.makedirs(vis_dir, exist_ok=True)
+    
+    # Get a batch of samples from the training loader
+    with torch.no_grad():
+        for batch_idx, img_low in enumerate(train_loader):
+            if batch_idx >= 2:  # Only process first 2 batches
+                break
+                
+            # Move to device
+            img_low = img_low.to(device)
+            
+            # Forward pass
+            img_enhanced, reflectance, illu_map = model(img_low)
+            
+            # Save visualizations for first few samples in the batch
+            for i in range(min(2, img_low.size(0))):  # Save max 2 samples per batch
+                # Create visualization
+                save_path = os.path.join(vis_dir, f'epoch_{epoch}_batch_{batch_idx}_sample_{i}.png')
+                visualize_results(
+                    img_low[i:i+1], 
+                    img_enhanced[i:i+1], 
+                    illu_map[i:i+1], 
+                    save_path=save_path
+                )
+    
+    model.train()  # Set model back to training mode
+
+
+def save_loss_curves(loss_history, save_dir):
+    """
+    Save loss curves as images
+    
+    Args:
+        loss_history: Dictionary containing loss history
+        save_dir: Directory to save the plots
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    plot_dir = os.path.join(save_dir, 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+    
+    # Plot individual loss curves
+    for key, values in loss_history.items():
+        if values:  # Only plot if there are values
+            plt.figure(figsize=(10, 6))
+            plt.plot(values)
+            plt.title(f'{key.capitalize()} Loss Curve')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.grid(True)
+            plt.tight_layout()
+            
+            # Save the plot
+            plot_path = os.path.join(plot_dir, f'{key}_curve.png')
+            plt.savefig(plot_path)
+            plt.close()
+            
+            print(f"Saved {key} curve: {plot_path}")
+    
+    # Plot combined loss curve
+    plt.figure(figsize=(12, 8))
+    for key, values in loss_history.items():
+        if values and key != 'total':  # Skip total for clarity
+            plt.plot(values, label=key.capitalize())
+    
+    plt.title('Training Loss Curves')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    
+    # Save the combined plot
+    combined_plot_path = os.path.join(plot_dir, 'combined_loss_curves.png')
+    plt.savefig(combined_plot_path)
+    plt.close()
+    
+    print(f"Saved combined loss curves: {combined_plot_path}")
+
+
+def save_results_to_csv(loss_history, save_dir):
+    """
+    Save loss history to CSV file
+    
+    Args:
+        loss_history: Dictionary containing loss history
+        save_dir: Directory to save the CSV
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    csv_path = os.path.join(save_dir, 'results.csv')
+    
+    # Get the number of epochs
+    num_epochs = len(next(iter(loss_history.values())))
+    
+    # Write to CSV
+    with open(csv_path, 'w', newline='') as csvfile:
+        fieldnames = ['epoch'] + list(loss_history.keys())
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        # Write header
+        writer.writeheader()
+        
+        # Write data rows
+        for epoch in range(num_epochs):
+            row = {'epoch': epoch}
+            for key, values in loss_history.items():
+                row[key] = values[epoch] if epoch < len(values) else ''
+            writer.writerow(row)
+    
+    print(f"Saved results to CSV: {csv_path}")

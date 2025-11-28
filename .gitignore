@@ -96,7 +96,9 @@ ipython_config.py
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially helpful in specifying exact versions of dependencies for reproducible builds.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
 #poetry.lock
 
 # pdm
@@ -123,8 +125,8 @@ celerybeat.pid
 env/
 venv/
 ENV/
-env.bak/
-venv.bak/
+env.bak
+venv.bak
 
 # Spyder project settings
 .spyderproject
@@ -157,17 +159,21 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Checkpoints and temporary files
+# Checkpoints
 checkpoints/
-*.pth
-*.ckpt
-*.pt
 
-# Results and outputs
-results/
-output/
+# Data directories
 data/output/
+data/train/
 
-# Logs
-*.log
-logs/
+# VS Code
+.vscode/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
