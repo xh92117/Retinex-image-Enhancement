@@ -65,6 +65,12 @@ def main():
                         help='颜色恒常性损失权重')
     parser.add_argument('--weight_spa', type=float, default=1.0,
                         help='空间一致性损失权重')
+    parser.add_argument('--weight_decouple', type=float, default=0.1,
+                        help='光照-反射率解耦损失权重')
+    parser.add_argument('--weight_perceptual', type=float, default=1.0,
+                        help='感知损失权重')
+    parser.add_argument('--weight_freq', type=float, default=0.5,
+                        help='频域损失权重')
     
     # 推理参数
     parser.add_argument('--max_size', type=int, default=None,
@@ -90,6 +96,24 @@ def main():
     parser.add_argument('--save_freq', type=int, default=10,
                         help='保存检查点的频率(每N个epoch)')
     
+    # 高级训练参数（新增）
+    parser.add_argument('--use_amp', action='store_true',
+                        help='使用自动混合精度训练（AMP）')
+    parser.add_argument('--patience', type=int, default=20,
+                        help='早停机制的耐心值')
+    parser.add_argument('--use_cosine_scheduler', action='store_true',
+                        help='使用余弦退火学习率调度器')
+    parser.add_argument('--use_freq_loss', action='store_true',
+                        help='启用频域损失')
+    parser.add_argument('--adaptive_weights', action='store_true',
+                        help='使用自适应损失权重')
+    parser.add_argument('--use_preact', action='store_true',
+                        help='使用预激活残差块')
+    parser.add_argument('--use_aspp', action='store_true',
+                        help='使用ASPP模块')
+    parser.add_argument('--advanced_augment', action='store_true',
+                        help='启用高级数据增强')
+    
     args = parser.parse_args()
     
     # 设置设备
@@ -105,7 +129,22 @@ def main():
         
         # 开始训练
         print("=" * 60)
-        print("开始训练 UP-Retinex 模型")
+        print("开始训练 UP-Retinex 模型（优化版）")
+        print("=" * 60)
+        
+        # 打印新特性状态
+        if args.use_amp:
+            print("✓ 混合精度训练已启用")
+        if args.use_freq_loss:
+            print("✓ 频域损失已启用")
+        if args.adaptive_weights:
+            print("✓ 自适应权重调整已启用")
+        if args.use_preact:
+            print("✓ 预激活残差块已启用")
+        if args.use_aspp:
+            print("✓ ASPP模块已启用")
+        if args.advanced_augment:
+            print("✓ 高级数据增强已启用")
         print("=" * 60)
         
         train(args)
@@ -120,9 +159,11 @@ def main():
         # 创建输出目录
         os.makedirs(args.output_dir, exist_ok=True)
         
-        # 加载模型
+        # 加载模型（使用改进的架构参数）
         print("正在加载模型...")
-        model = UP_Retinex()
+        use_preact = getattr(args, 'use_preact', False)
+        use_aspp = getattr(args, 'use_aspp', False)
+        model = UP_Retinex(use_preact=use_preact, use_aspp=use_aspp)
         checkpoint = torch.load(args.checkpoint, map_location='cpu')
         model.load_state_dict(checkpoint['model_state_dict'])
         model = model.to(args.device)
@@ -182,8 +223,10 @@ def main():
             # 单张图像增强
             print(f"处理单张图像: {input_path}")
             
-            # 初始化模型
-            model = UP_Retinex()
+            # 初始化模型（使用改进的架构）
+            use_preact = getattr(args, 'use_preact', False)
+            use_aspp = getattr(args, 'use_aspp', False)
+            model = UP_Retinex(use_preact=use_preact, use_aspp=use_aspp)
             model = model.to(args.device)
             model.eval()
             

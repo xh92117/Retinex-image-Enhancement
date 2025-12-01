@@ -427,19 +427,182 @@ class SpatialConsistencyLoss(nn.Module):
         return loss
 
 
+class FrequencyLoss(nn.Module):
+    """
+    Frequency Domain Loss (L_freq)
+    
+    在频域中保持图像的高频细节，确保增强后的图像保留原始纹理信息。
+    使用FFT将图像转换到频域，比较幅度谱的差异。
+    
+    特点：
+    - 保持图像的频率特性
+    - 重点关注高频细节（纹理）
+    - 使用傅里叶变换分析
+    """
+    def __init__(self, weight_high=1.0, weight_low=0.5):
+        super(FrequencyLoss, self).__init__()
+        self.weight_high = weight_high  # 高频权重
+        self.weight_low = weight_low    # 低频权重
+    
+    def forward(self, img_enhanced, img_low):
+        """
+        Args:
+            img_enhanced (torch.Tensor): Enhanced image [B, C, H, W]
+            img_low (torch.Tensor): Input low-light image [B, C, H, W]
+            
+        Returns:
+            loss (torch.Tensor): Scalar loss value
+        """
+        # 转换到频域 (使用2D FFT)
+        fft_enhanced = torch.fft.fft2(img_enhanced, dim=(-2, -1))
+        fft_low = torch.fft.fft2(img_low, dim=(-2, -1))
+        
+        # 计算幅度谱
+        mag_enhanced = torch.abs(fft_enhanced)
+        mag_low = torch.abs(fft_low)
+        
+        # 创建高频和低频掩码
+        B, C, H, W = img_enhanced.shape
+        high_freq_mask, low_freq_mask = self._create_frequency_masks(H, W, img_enhanced.device)
+        
+        # 扩展掩码以匹配批次和通道维度
+        high_freq_mask = high_freq_mask.unsqueeze(0).unsqueeze(0).expand(B, C, -1, -1)
+        low_freq_mask = low_freq_mask.unsqueeze(0).unsqueeze(0).expand(B, C, -1, -1)
+        
+        # 计算高频损失（保持细节）
+        high_freq_loss = F.mse_loss(
+            mag_enhanced * high_freq_mask,
+            mag_low * high_freq_mask
+        )
+        
+        # 计算低频损失（整体亮度）
+        low_freq_loss = F.mse_loss(
+            mag_enhanced * low_freq_mask,
+            mag_low * low_freq_mask
+        )
+        
+        # 加权组合
+        loss = self.weight_high * high_freq_loss + self.weight_low * low_freq_loss
+        
+        return loss
+    
+    def _create_frequency_masks(self, H, W, device):
+        """
+        创建高频和低频掩码
+        
+        Args:
+            H (int): 图像高度
+            W (int): 图像宽度
+            device: 设备
+            
+        Returns:
+            high_freq_mask: 高频掩码
+            low_freq_mask: 低频掩码
+        """
+        # 创建坐标网格
+        center_h, center_w = H // 2, W // 2
+        y, x = torch.meshgrid(
+            torch.arange(H, device=device),
+            torch.arange(W, device=device),
+            indexing='ij'
+        )
+        
+        # 计算到中心的距离
+        dist = torch.sqrt((x - center_w).float() ** 2 + (y - center_h).float() ** 2)
+        
+        # 定义高频和低频的阈值（低频半径为图像对角线的1/4）
+        radius = min(H, W) // 4
+        
+        # 创建掩码
+        low_freq_mask = (dist <= radius).float()
+        high_freq_mask = (dist > radius).float()
+        
+        return high_freq_mask, low_freq_mask
+
+
+def calculate_texture_complexity(img, method='tv'):
+    """
+    计算图像的纹理复杂度
+    
+    Args:
+        img (torch.Tensor): 输入图像 [B, C, H, W]
+        method (str): 纹理复杂度计算方法，可选值：'tv' (全变分) 或 'edge_density' (边缘密度)
+        
+    Returns:
+        complexity (torch.Tensor): 纹理复杂度值 [B]
+    """
+    B, C, H, W = img.shape
+    
+    if method == 'tv':
+        # 全变分（Total Variation）：计算图像梯度的L1范数
+        # 水平梯度
+        grad_h = torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:])
+        # 垂直梯度
+        grad_v = torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :])
+        
+        # 计算每个通道的TV值，然后求平均
+        tv_h = torch.mean(grad_h, dim=(1, 2, 3))
+        tv_v = torch.mean(grad_v, dim=(1, 2, 3))
+        
+        # 总TV值
+        complexity = tv_h + tv_v
+        
+    elif method == 'edge_density':
+        # 边缘密度：使用Sobel边缘检测计算边缘像素比例
+        # 转换为灰度图
+        if C > 1:
+            gray = torch.mean(img, dim=1, keepdim=True)
+        else:
+            gray = img
+        
+        # Sobel滤波器
+        sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]], device=img.device).view(1, 1, 3, 3)
+        sobel_y = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]], device=img.device).view(1, 1, 3, 3)
+        
+        # 扩展滤波器以匹配批次和通道
+        sobel_x = sobel_x.expand(1, gray.shape[1], 3, 3)
+        sobel_y = sobel_y.expand(1, gray.shape[1], 3, 3)
+        
+        # 计算边缘
+        padded = F.pad(gray, (1, 1, 1, 1), mode='reflect')
+        grad_x = F.conv2d(padded, sobel_x, padding=0)
+        grad_y = F.conv2d(padded, sobel_y, padding=0)
+        
+        # 计算边缘幅度
+        edge_mag = torch.sqrt(grad_x ** 2 + grad_y ** 2)
+        
+        # 二值化边缘（使用自适应阈值）
+        threshold = torch.mean(edge_mag, dim=(1, 2, 3), keepdim=True) * 1.5
+        edge_mask = (edge_mag > threshold).float()
+        
+        # 计算边缘密度
+        complexity = torch.mean(edge_mask, dim=(1, 2, 3))
+    else:
+        raise ValueError(f"不支持的纹理复杂度计算方法: {method}")
+    
+    return complexity
+
+
 class TotalLoss(nn.Module):
     """
-    Total Loss Function for UP-Retinex
+    Total Loss Function for UP-Retinex (Improved Version)
     
-    L_total = L_exp + ω_smooth * L_smooth + ω_col * L_col + ω_spa * L_spa + ω_decouple * L_decouple + ω_perceptual * L_perceptual
+    L_total = L_exp + ω_smooth * L_smooth + ω_col * L_col + ω_spa * L_spa + 
+              ω_decouple * L_decouple + ω_perceptual * L_perceptual + ω_freq * L_freq
     
     Default weights (as per specification):
     - L_exp: 10.0
-    - L_smooth: 1.0
+    - L_smooth: 1.0 (动态调整)
     - L_col: 0.5
     - L_spa: 1.0
     - L_decouple: 0.1
     - L_perceptual: 1.0
+    - L_freq: 0.5 (新增)
+    
+    特点：
+    - 支持频域损失
+    - 可选的自适应权重调整
+    - 根据纹理复杂度动态调整平滑损失权重
     """
     def __init__(self, 
                  weight_exp=10.0,
@@ -447,7 +610,12 @@ class TotalLoss(nn.Module):
                  weight_col=0.5,
                  weight_spa=1.0,
                  weight_decouple=0.1,
-                 weight_perceptual=1.0):
+                 weight_perceptual=1.0,
+                 weight_freq=0.5,
+                 use_freq_loss=True,
+                 adaptive_weights=False,
+                 use_dynamic_smooth_weight=True,
+                 texture_method='tv'):
         super(TotalLoss, self).__init__()
         
         # Initialize individual loss functions
@@ -457,6 +625,7 @@ class TotalLoss(nn.Module):
         self.spatial_loss = SpatialConsistencyLoss()
         self.decouple_loss = IlluminationReflectanceDecouplingLoss()
         self.perceptual_loss = PerceptualLoss()
+        self.frequency_loss = FrequencyLoss() if use_freq_loss else None
         
         # Loss weights
         self.weight_exp = weight_exp
@@ -465,16 +634,35 @@ class TotalLoss(nn.Module):
         self.weight_spa = weight_spa
         self.weight_decouple = weight_decouple
         self.weight_perceptual = weight_perceptual
+        self.weight_freq = weight_freq
         
-    def forward(self, img_low, img_enhanced, illu_map, reflectance=None):
+        self.use_freq_loss = use_freq_loss
+        self.adaptive_weights = adaptive_weights
+        self.use_dynamic_smooth_weight = use_dynamic_smooth_weight
+        self.texture_method = texture_method
+        
+        # 用于自适应权重调整的历史记录
+        if adaptive_weights:
+            self.loss_history = {
+                'exposure': [],
+                'smoothness': [],
+                'color': [],
+                'spatial': [],
+                'decouple': [],
+                'perceptual': [],
+                'frequency': []
+            }
+        
+    def forward(self, img_low, img_enhanced, illu_map, reflectance=None, epoch=0):
         """
-        Compute total loss
+        Compute total loss with optional frequency loss and adaptive weights
         
         Args:
             img_low (torch.Tensor): Input low-light image S [B, C, H, W]
             img_enhanced (torch.Tensor): Enhanced image R [B, C, H, W]
             illu_map (torch.Tensor): Illumination map I [B, C, H, W]
             reflectance (torch.Tensor, optional): Reflectance map R [B, C, H, W]
+            epoch (int): Current training epoch (for adaptive weights)
             
         Returns:
             total_loss (torch.Tensor): Scalar total loss
@@ -491,15 +679,64 @@ class TotalLoss(nn.Module):
         if reflectance is not None:
             loss_decouple = self.decouple_loss(illu_map, reflectance)
         else:
-            loss_decouple = 0.0
+            loss_decouple = torch.tensor(0.0, device=img_low.device)
+        
+        # Compute frequency loss if enabled
+        if self.use_freq_loss and self.frequency_loss is not None:
+            loss_freq = self.frequency_loss(img_enhanced, img_low)
+        else:
+            loss_freq = torch.tensor(0.0, device=img_low.device)
+        
+        # 获取当前权重（可能是自适应的）
+        if self.adaptive_weights and epoch > 1:
+            weights = self._compute_adaptive_weights()
+        else:
+            weights = {
+                'exposure': self.weight_exp,
+                'smoothness': self.weight_smooth,
+                'color': self.weight_col,
+                'spatial': self.weight_spa,
+                'decouple': self.weight_decouple,
+                'perceptual': self.weight_perceptual,
+                'frequency': self.weight_freq
+            }
+        
+        # 根据纹理复杂度动态调整平滑损失权重
+        if self.use_dynamic_smooth_weight:
+            # 计算输入图像的纹理复杂度
+            texture_complexity = calculate_texture_complexity(img_low, method=self.texture_method)
+            
+            # 计算批次的平均纹理复杂度
+            avg_complexity = torch.mean(texture_complexity)
+            
+            # 动态调整平滑损失权重：
+            # - 纹理复杂度高的图像：降低平滑权重，保留更多细节
+            # - 纹理复杂度低的图像：提高平滑权重，增强平滑效果
+            # 权重范围：0.1 - 5.0
+            dynamic_smooth_weight = self.weight_smooth * (1.0 - avg_complexity * 0.8)
+            dynamic_smooth_weight = torch.clamp(dynamic_smooth_weight, 0.1, 5.0)
+            
+            # 更新权重
+            weights['smoothness'] = dynamic_smooth_weight
         
         # Compute weighted total loss
-        total_loss = (self.weight_exp * loss_exp +
-                     self.weight_smooth * loss_smooth +
-                     self.weight_col * loss_col +
-                     self.weight_spa * loss_spa +
-                     self.weight_decouple * loss_decouple +
-                     self.weight_perceptual * loss_perceptual)
+        total_loss = (weights['exposure'] * loss_exp +
+                     weights['smoothness'] * loss_smooth +
+                     weights['color'] * loss_col +
+                     weights['spatial'] * loss_spa +
+                     weights['decouple'] * loss_decouple +
+                     weights['perceptual'] * loss_perceptual +
+                     weights['frequency'] * loss_freq)
+        
+        # 更新损失历史（用于自适应权重）
+        if self.adaptive_weights:
+            self.loss_history['exposure'].append(loss_exp.item())
+            self.loss_history['smoothness'].append(loss_smooth.item())
+            self.loss_history['color'].append(loss_col.item())
+            self.loss_history['spatial'].append(loss_spa.item())
+            self.loss_history['decouple'].append(loss_decouple.item() if isinstance(loss_decouple, torch.Tensor) else loss_decouple)
+            self.loss_history['perceptual'].append(loss_perceptual.item())
+            self.loss_history['frequency'].append(loss_freq.item() if isinstance(loss_freq, torch.Tensor) else loss_freq)
         
         # Create dictionary for logging
         loss_dict = {
@@ -508,11 +745,57 @@ class TotalLoss(nn.Module):
             'smoothness': loss_smooth.item(),
             'color': loss_col.item(),
             'spatial': loss_spa.item(),
-            'decouple': loss_decouple.item() if reflectance is not None else 0.0,
-            'perceptual': loss_perceptual.item()
+            'decouple': loss_decouple.item() if isinstance(loss_decouple, torch.Tensor) else loss_decouple,
+            'perceptual': loss_perceptual.item(),
+            'frequency': loss_freq.item() if isinstance(loss_freq, torch.Tensor) else 0.0
         }
         
         return total_loss, loss_dict
+    
+    def _compute_adaptive_weights(self):
+        """
+        使用Dynamic Weight Average (DWA)算法计算自适应权重
+        根据损失的相对变化率动态调整权重
+        """
+        weights = {}
+        temperature = 2.0
+        
+        for key in self.loss_history:
+            if len(self.loss_history[key]) >= 2:
+                # 计算损失变化率
+                current = self.loss_history[key][-1]
+                previous = self.loss_history[key][-2]
+                
+                # 避免除零
+                if previous > 1e-8:
+                    ratio = current / previous
+                else:
+                    ratio = 1.0
+                
+                # 使用指数加权
+                weights[key] = ratio / temperature
+            else:
+                # 使用默认权重
+                weight_map = {
+                    'exposure': self.weight_exp,
+                    'smoothness': self.weight_smooth,
+                    'color': self.weight_col,
+                    'spatial': self.weight_spa,
+                    'decouple': self.weight_decouple,
+                    'perceptual': self.weight_perceptual,
+                    'frequency': self.weight_freq
+                }
+                weights[key] = weight_map.get(key, 1.0)
+        
+        # 归一化权重
+        if weights:
+            total_weight = sum(weights.values())
+            if total_weight > 0:
+                num_losses = len(weights)
+                for key in weights:
+                    weights[key] = num_losses * weights[key] / total_weight
+        
+        return weights
 
 
 if __name__ == "__main__":

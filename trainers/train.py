@@ -11,6 +11,7 @@ from datetime import datetime
 import torch
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import csv
@@ -23,9 +24,9 @@ from losses.loss import TotalLoss
 from datasets.dataset import get_train_dataloader
 
 
-def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writer):
+def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writer, scaler=None, use_amp=False):
     """
-    Train for one epoch
+    Train for one epoch with mixed precision training support
     
     Args:
         model: UP_Retinex model
@@ -35,6 +36,8 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writ
         device: Device (cuda/cpu)
         epoch: Current epoch number
         writer: TensorBoard writer
+        scaler: GradScaler for mixed precision training
+        use_amp: Whether to use automatic mixed precision
         
     Returns:
         avg_loss_dict: Dictionary of average losses
@@ -64,20 +67,40 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writ
         # Zero gradients
         optimizer.zero_grad()
         
-        # Forward pass
-        img_enhanced, reflectance, illu_map = model(img_low)
-        
-        # Compute loss
-        loss, loss_dict = criterion(img_low, img_enhanced, illu_map, reflectance)
-        
-        # Backward pass
-        loss.backward()
-        
-        # Gradient clipping (optional, for stability)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
-        # Update weights
-        optimizer.step()
+        # Forward pass with mixed precision
+        if use_amp and scaler is not None:
+            with autocast():
+                # Forward pass
+                img_enhanced, reflectance, illu_map = model(img_low)
+                
+                # Compute loss
+                loss, loss_dict = criterion(img_low, img_enhanced, illu_map, reflectance)
+            
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
+            
+            # Unscale gradients and clip
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            # Update weights
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # Forward pass
+            img_enhanced, reflectance, illu_map = model(img_low)
+            
+            # Compute loss
+            loss, loss_dict = criterion(img_low, img_enhanced, illu_map, reflectance)
+            
+            # Backward pass
+            loss.backward()
+            
+            # Gradient clipping (for stability)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            # Update weights
+            optimizer.step()
         
         # Accumulate losses
         for key in total_losses.keys():
@@ -99,7 +122,11 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writ
                 writer.add_scalar(f'Loss/{key}', value, global_step)
     
     # Calculate average losses
-    avg_loss_dict = {key: value / num_batches for key, value in total_losses.items()}
+    if num_batches > 0:
+        avg_loss_dict = {key: value / num_batches for key, value in total_losses.items()}
+    else:
+        # If no batches, return the raw losses (or handle appropriately)
+        avg_loss_dict = total_losses
     
     return avg_loss_dict
 
@@ -170,12 +197,18 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Create model
+    # Create model with improved architecture
     print("Creating model...")
-    model = MultiScaleUP_Retinex().to(device)
+    use_preact = getattr(args, 'use_preact', False)
+    use_aspp = getattr(args, 'use_aspp', False)
+    model = MultiScaleUP_Retinex(use_preact=use_preact, use_aspp=use_aspp).to(device)
     print(f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    if use_preact:
+        print("  Using Pre-activation ResBlocks")
+    if use_aspp:
+        print("  Using ASPP modules")
     
-    # Create loss function
+    # Create loss function with improved features
     # Handle potential missing arguments with defaults
     weight_exp = getattr(args, 'weight_exp', 10.0)
     weight_smooth = getattr(args, 'weight_smooth', 1.0)
@@ -183,6 +216,10 @@ def train(args):
     weight_spa = getattr(args, 'weight_spa', 1.0)
     weight_decouple = getattr(args, 'weight_decouple', 0.1)
     weight_perceptual = getattr(args, 'weight_perceptual', 1.0)
+    weight_freq = getattr(args, 'weight_freq', 0.5)
+    
+    use_freq_loss = getattr(args, 'use_freq_loss', False)
+    adaptive_weights = getattr(args, 'adaptive_weights', False)
     
     criterion = TotalLoss(
         weight_exp=weight_exp,
@@ -190,8 +227,15 @@ def train(args):
         weight_col=weight_col,
         weight_spa=weight_spa,
         weight_decouple=weight_decouple,
-        weight_perceptual=weight_perceptual
+        weight_perceptual=weight_perceptual,
+        weight_freq=weight_freq,
+        use_freq_loss=use_freq_loss,
+        adaptive_weights=adaptive_weights
     ).to(device)
+    
+    print(f"Loss function configured:")
+    print(f"  - Frequency loss: {'enabled' if use_freq_loss else 'disabled'}")
+    print(f"  - Adaptive weights: {'enabled' if adaptive_weights else 'disabled'}")
     
     # Create optimizer
     optimizer = optim.Adam(
@@ -200,12 +244,34 @@ def train(args):
         weight_decay=args.weight_decay
     )
     
-    # Learning rate scheduler (optional)
-    scheduler = optim.lr_scheduler.StepLR(
-        optimizer,
-        step_size=args.lr_decay_step,
-        gamma=args.lr_decay_gamma
-    )
+    # Learning rate scheduler - 使用CosineAnnealingWarmRestarts更好的性能
+    use_cosine_scheduler = getattr(args, 'use_cosine_scheduler', False)
+    if use_cosine_scheduler:
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=10,
+            T_mult=2,
+            eta_min=1e-6
+        )
+        print("Using CosineAnnealingWarmRestarts scheduler")
+    else:
+        scheduler = optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=args.lr_decay_step,
+            gamma=args.lr_decay_gamma
+        )
+    
+    # 混合精度训练初始化
+    use_amp = getattr(args, 'use_amp', False) and torch.cuda.is_available()
+    scaler = GradScaler() if use_amp else None
+    if use_amp:
+        print("Mixed precision training enabled (AMP)")
+    
+    # 早停机制初始化
+    patience = getattr(args, 'patience', 20)
+    best_loss = float('inf')
+    patience_counter = 0
+    print(f"Early stopping patience: {patience}")
     
     # Load checkpoint if resuming
     start_epoch = 0
@@ -214,14 +280,24 @@ def train(args):
     
     # Create dataloader
     print("Creating dataloader...")
+    advanced_augment = getattr(args, 'advanced_augment', False)
     train_loader = get_train_dataloader(
         image_dir=args.train_dir,
         batch_size=args.batch_size,
         image_size=args.image_size,
         num_workers=args.num_workers,
-        shuffle=True
+        shuffle=True,
+        advanced_augment=advanced_augment
     )
     print(f"Number of training batches: {len(train_loader)}")
+    if advanced_augment:
+        print("  Using advanced data augmentation")
+    
+    # Check if there are any training batches
+    if len(train_loader) == 0:
+        print("错误：训练数据不足，无法创建批次。请增加训练数据或减小batch_size。")
+        print(f"当前设置：样本数={len(train_loader.dataset)}, batch_size={args.batch_size}")
+        return
     
     # Create TensorBoard writer
     log_dir = os.path.join(args.save_dir, 'logs', datetime.now().strftime('%Y%m%d_%H%M%S'))
@@ -249,9 +325,10 @@ def train(args):
     for epoch in range(start_epoch, args.num_epochs):
         epoch_start_time = time.time()
         
-        # Train one epoch
+        # Train one epoch with mixed precision support
         avg_loss_dict = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, epoch, writer
+            model, train_loader, criterion, optimizer, device, epoch, writer,
+            scaler=scaler, use_amp=use_amp
         )
         
         # Save sample visualization every 10 epochs
@@ -280,13 +357,28 @@ def train(args):
         for key, value in avg_loss_dict.items():
             writer.add_scalar(f'Epoch_Loss/{key}', value, epoch)
         
-        # Save checkpoint
-        is_best = avg_loss_dict['total'] < best_loss
-        if is_best:
-            best_loss = avg_loss_dict['total']
+        # 早停机制检查
+        current_total_loss = avg_loss_dict['total']
+        if current_total_loss < best_loss:
+            best_loss = current_total_loss
+            patience_counter = 0
+            is_best = True
+            print(f"  ✓ New best loss: {best_loss:.6f}")
+        else:
+            patience_counter += 1
+            is_best = False
+            print(f"  Patience: {patience_counter}/{patience}")
         
         # Always save the latest model and save best model when improved
         save_checkpoint(model, optimizer, epoch, args.save_dir, is_best)
+        
+        # 检查是否应该早停
+        if patience_counter >= patience:
+            print("\n" + "=" * 60)
+            print(f"Early stopping triggered after {epoch + 1} epochs")
+            print(f"Best loss: {best_loss:.6f}")
+            print("=" * 60)
+            break
         
         print("=" * 60)
     
@@ -352,6 +444,14 @@ def main():
                         help='Path to checkpoint to resume from')
     parser.add_argument('--save_freq', type=int, default=10,
                         help='Save checkpoint every N epochs')
+    
+    # Advanced training arguments
+    parser.add_argument('--use_amp', action='store_true',
+                        help='Use automatic mixed precision training')
+    parser.add_argument('--patience', type=int, default=20,
+                        help='Early stopping patience')
+    parser.add_argument('--use_cosine_scheduler', action='store_true',
+                        help='Use cosine annealing scheduler instead of step scheduler')
     
     args = parser.parse_args()
     

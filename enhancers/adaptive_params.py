@@ -118,6 +118,56 @@ class AdaptiveParameterAdjuster:
         
         return params
     
+    def apply_clahe_enhancement(self, image_tensor):
+        """
+        应用CLAHE增强到图像张量
+        
+        Args:
+            image_tensor (torch.Tensor): 输入图像张量 [1, 3, H, W] 或 [3, H, W]
+            
+        Returns:
+            clahe_enhanced (torch.Tensor): CLAHE增强后的图像张量
+        """
+        # 确保图像张量是正确的形状
+        if image_tensor.dim() == 3:
+            image_tensor = image_tensor.unsqueeze(0)
+        
+        # 转换为numpy数组
+        img_np = image_tensor.squeeze(0).cpu().detach().numpy()
+        
+        # 转换为 [H, W, C] 格式
+        img_np = np.transpose(img_np, (1, 2, 0))
+        
+        # 转换为OpenCV格式 (BGR) 并转换为8位
+        img_cv = cv2.cvtColor((img_np * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+        
+        # 转换为Lab色彩空间，只对L通道进行CLAHE增强
+        lab = cv2.cvtColor(img_cv, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        
+        # 创建CLAHE对象
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        
+        # 应用CLAHE到L通道
+        l_clahe = clahe.apply(l)
+        
+        # 合并通道
+        lab_clahe = cv2.merge((l_clahe, a, b))
+        
+        # 转换回BGR格式
+        img_clahe = cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2BGR)
+        
+        # 转换回RGB格式
+        img_clahe = cv2.cvtColor(img_clahe, cv2.COLOR_BGR2RGB)
+        
+        # 转换为张量并归一化到[0, 1]
+        clahe_tensor = torch.from_numpy(img_clahe.astype(np.float32) / 255.0)
+        
+        # 转换为 [1, 3, H, W] 格式
+        clahe_tensor = clahe_tensor.permute(2, 0, 1).unsqueeze(0)
+        
+        return clahe_tensor
+    
     def apply_adaptive_enhancement(self, model, image_tensor, device):
         """
         应用自适应增强参数到模型推理
@@ -141,8 +191,11 @@ class AdaptiveParameterAdjuster:
         with torch.no_grad():
             enhanced_img, reflectance, illu_map = model(image_tensor)
         
-        # 应用参数调整（这里可以根据需要进一步实现具体的参数应用逻辑）
-        # 目前只是返回原始结果，但在实际应用中可以根据params调整后处理
+        # 应用CLAHE增强到模型输出
+        enhanced_img = self.apply_clahe_enhancement(enhanced_img)
+        
+        # 将增强后的图像移回设备
+        enhanced_img = enhanced_img.to(device)
         
         return enhanced_img, illu_map
 

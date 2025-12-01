@@ -94,45 +94,243 @@ def plot_training_curves(log_file, save_path=None):
 
 def calculate_metrics(img_enhanced, img_reference=None):
     """
-    Calculate image quality metrics
+    Calculate comprehensive image quality metrics
     
     Args:
-        img_enhanced (torch.Tensor): Enhanced image
-        img_reference (torch.Tensor): Reference image (optional, for PSNR/SSIM)
+        img_enhanced (torch.Tensor or np.ndarray): Enhanced image
+        img_reference (torch.Tensor or np.ndarray): Reference image (optional, for PSNR/SSIM)
         
     Returns:
         metrics (dict): Dictionary of metrics
     """
     metrics = {}
     
-    # Convert to numpy
+    # Convert to numpy if needed
     if isinstance(img_enhanced, torch.Tensor):
-        img_enhanced = img_enhanced.cpu().detach().numpy()
+        img_enhanced_np = img_enhanced.cpu().detach().numpy()
+    else:
+        img_enhanced_np = img_enhanced.copy()
     
     # Remove batch dimension if present
-    if img_enhanced.ndim == 4:
-        img_enhanced = img_enhanced.squeeze(0)
+    if img_enhanced_np.ndim == 4:
+        img_enhanced_np = img_enhanced_np.squeeze(0)
     
     # Transpose to [H, W, C] if needed
-    if img_enhanced.shape[0] == 3:
-        img_enhanced = img_enhanced.transpose(1, 2, 0)
+    if img_enhanced_np.shape[0] == 3:
+        img_enhanced_np = img_enhanced_np.transpose(1, 2, 0)
     
-    # Calculate mean brightness
-    mean_brightness = np.mean(img_enhanced)
+    # === 基础指标 ===
+    
+    # Mean brightness
+    mean_brightness = np.mean(img_enhanced_np)
     metrics['mean_brightness'] = float(mean_brightness)
     
-    # Calculate contrast (standard deviation)
-    contrast = np.std(img_enhanced)
+    # Contrast (standard deviation)
+    contrast = np.std(img_enhanced_np)
     metrics['contrast'] = float(contrast)
     
-    # Calculate entropy (information content)
-    hist, _ = np.histogram(img_enhanced.flatten(), bins=256, range=(0, 1))
+    # Entropy (information content)
+    hist, _ = np.histogram(img_enhanced_np.flatten(), bins=256, range=(0, 1))
     hist = hist / hist.sum()
     hist = hist[hist > 0]  # Remove zeros
     entropy = -np.sum(hist * np.log2(hist))
     metrics['entropy'] = float(entropy)
     
+    # === 无参考质量指标 ===
+    
+    # NIQE (Natural Image Quality Evaluator)
+    try:
+        metrics['niqe'] = calculate_niqe(img_enhanced_np)
+    except Exception as e:
+        metrics['niqe'] = None
+        print(f"NIQE calculation failed: {e}")
+    
+    # === 有参考质量指标 ===
+    
+    if img_reference is not None:
+        # Convert reference to numpy
+        if isinstance(img_reference, torch.Tensor):
+            img_reference_np = img_reference.cpu().detach().numpy()
+        else:
+            img_reference_np = img_reference.copy()
+        
+        if img_reference_np.ndim == 4:
+            img_reference_np = img_reference_np.squeeze(0)
+        
+        if img_reference_np.shape[0] == 3:
+            img_reference_np = img_reference_np.transpose(1, 2, 0)
+        
+        # PSNR
+        metrics['psnr'] = calculate_psnr(img_enhanced_np, img_reference_np)
+        
+        # SSIM
+        metrics['ssim'] = calculate_ssim(img_enhanced_np, img_reference_np)
+        
+        # MSE
+        metrics['mse'] = float(np.mean((img_enhanced_np - img_reference_np) ** 2))
+    
+    # === 低光增强专用指标 ===
+    
+    # LOE (Lightness Order Error) - 需要原始低光图像
+    # 这里暂不实现，因为需要原始图像
+    
+    # 色彩饱和度
+    metrics['saturation'] = calculate_saturation(img_enhanced_np)
+    
+    # 自然度评分（基于色彩分布）
+    metrics['naturalness'] = calculate_naturalness(img_enhanced_np)
+    
     return metrics
+
+
+def calculate_psnr(img1, img2):
+    """
+    计算PSNR (Peak Signal-to-Noise Ratio)
+    
+    Args:
+        img1 (np.ndarray): 第一张图像 [H, W, C]
+        img2 (np.ndarray): 第二张图像 [H, W, C]
+        
+    Returns:
+        float: PSNR值（dB）
+    """
+    mse = np.mean((img1 - img2) ** 2)
+    if mse < 1e-10:
+        return 100.0
+    max_pixel = 1.0
+    psnr = 20 * np.log10(max_pixel / np.sqrt(mse))
+    return float(psnr)
+
+
+def calculate_ssim(img1, img2):
+    """
+    计算SSIM (Structural Similarity Index)
+    
+    Args:
+        img1 (np.ndarray): 第一张图像 [H, W, C]
+        img2 (np.ndarray): 第二张图像 [H, W, C]
+        
+    Returns:
+        float: SSIM值 [0, 1]
+    """
+    C1 = (0.01) ** 2
+    C2 = (0.03) ** 2
+    
+    img1 = img1.astype(np.float64)
+    img2 = img2.astype(np.float64)
+    
+    kernel = np.ones((11, 11)) / 121
+    
+    def convolve2d(img, kernel):
+        from scipy.ndimage import convolve
+        return convolve(img, kernel, mode='constant')
+    
+    # 对每个通道计算SSIM
+    ssim_channels = []
+    for i in range(img1.shape[2]):
+        mu1 = convolve2d(img1[:, :, i], kernel)
+        mu2 = convolve2d(img2[:, :, i], kernel)
+        
+        mu1_sq = mu1 ** 2
+        mu2_sq = mu2 ** 2
+        mu1_mu2 = mu1 * mu2
+        
+        sigma1_sq = convolve2d(img1[:, :, i] ** 2, kernel) - mu1_sq
+        sigma2_sq = convolve2d(img2[:, :, i] ** 2, kernel) - mu2_sq
+        sigma12 = convolve2d(img1[:, :, i] * img2[:, :, i], kernel) - mu1_mu2
+        
+        ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / \
+                   ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+        
+        ssim_channels.append(np.mean(ssim_map))
+    
+    return float(np.mean(ssim_channels))
+
+
+def calculate_niqe(img):
+    """
+    计算NIQE (Natural Image Quality Evaluator) - 简化版本
+    
+    Args:
+        img (np.ndarray): 图像 [H, W, C]
+        
+    Returns:
+        float: NIQE分数（越低越好）
+    """
+    # 简化的NIQE实现，基于图像统计特性
+    # 真实的NIQE需要预训练的模型
+    
+    # 转换为灰度
+    if len(img.shape) == 3:
+        gray = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
+    else:
+        gray = img
+    
+    # 计算局部统计特性
+    from scipy.ndimage import uniform_filter
+    
+    mu = uniform_filter(gray, size=7)
+    sigma = np.sqrt(uniform_filter(gray**2, size=7) - mu**2)
+    
+    # 简化的质量评分
+    score = np.mean(sigma) / (np.std(mu) + 1e-8)
+    
+    return float(score)
+
+
+def calculate_saturation(img):
+    """
+    计算图像色彩饱和度
+    
+    Args:
+        img (np.ndarray): 图像 [H, W, C]
+        
+    Returns:
+        float: 平均饱和度 [0, 1]
+    """
+    if len(img.shape) != 3 or img.shape[2] != 3:
+        return 0.0
+    
+    # RGB to HSV
+    max_val = np.max(img, axis=2)
+    min_val = np.min(img, axis=2)
+    
+    # 饱和度 = (max - min) / max
+    saturation = np.zeros_like(max_val)
+    mask = max_val > 1e-8
+    saturation[mask] = (max_val[mask] - min_val[mask]) / max_val[mask]
+    
+    return float(np.mean(saturation))
+
+
+def calculate_naturalness(img):
+    """
+    计算图像自然度评分
+    基于色彩分布和对比度
+    
+    Args:
+        img (np.ndarray): 图像 [H, W, C]
+        
+    Returns:
+        float: 自然度评分 [0, 1]，越高越自然
+    """
+    # 1. 检查色彩分布的均衡性
+    color_balance = 1.0 - np.std([np.mean(img[:, :, i]) for i in range(3)])
+    
+    # 2. 检查对比度是否合理
+    contrast = np.std(img)
+    contrast_score = 1.0 - abs(contrast - 0.15) / 0.15  # 理想对比度约为0.15
+    contrast_score = max(0, min(1, contrast_score))
+    
+    # 3. 检查亮度是否合理
+    brightness = np.mean(img)
+    brightness_score = 1.0 - abs(brightness - 0.5) / 0.5  # 理想亮度约为0.5
+    brightness_score = max(0, min(1, brightness_score))
+    
+    # 综合评分
+    naturalness = 0.3 * color_balance + 0.4 * contrast_score + 0.3 * brightness_score
+    
+    return float(naturalness)
 
 
 def create_gif(image_paths, output_path, duration=500):

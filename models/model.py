@@ -135,6 +135,122 @@ class ResBlock(nn.Module):
         return out
 
 
+class PreActResBlock(nn.Module):
+    """
+    Pre-activation Residual Block - 训练更稳定，性能更好
+    
+    特点：
+    - 批归一化和激活在卷积之前
+    - 更容易优化，梯度流更顺畅
+    - 适合深层网络
+    """
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(PreActResBlock, self).__init__()
+        self.bn1 = nn.BatchNorm2d(in_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        
+        # Shortcut连接
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+    
+    def forward(self, x):
+        # 预激活
+        out = self.relu(self.bn1(x))
+        shortcut = self.shortcut(out) if len(self.shortcut) > 0 else x
+        
+        # 第一个卷积
+        out = self.conv1(out)
+        
+        # 第二个卷积（带预激活）
+        out = self.conv2(self.relu(self.bn2(out)))
+        
+        # 残差连接
+        out += shortcut
+        
+        return out
+
+
+class ASPPModule(nn.Module):
+    """
+    Atrous Spatial Pyramid Pooling (ASPP) 模块
+    
+    特点：
+    - 使用不同膨胀率捕获多尺度上下文信息
+    - 包含全局平均池化分支
+    - 有效扩大感受野而不增加参数量
+    """
+    def __init__(self, in_channels, out_channels, dilations=[1, 6, 12, 18]):
+        super(ASPPModule, self).__init__()
+        
+        self.dilations = dilations
+        
+        # 1x1卷积分支
+        self.conv1x1 = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # 不同膨胀率的3x3卷积分支
+        self.aspp_branches = nn.ModuleList()
+        for dilation in dilations[1:]:
+            self.aspp_branches.append(
+                nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels, kernel_size=3, 
+                             padding=dilation, dilation=dilation, bias=False),
+                    nn.BatchNorm2d(out_channels),
+                    nn.ReLU(inplace=True)
+                )
+            )
+        
+        # 全局平均池化分支
+        self.global_pool = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+        # 特征融合
+        total_channels = out_channels * (len(dilations) + 1)
+        self.fusion = nn.Sequential(
+            nn.Conv2d(total_channels, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1)
+        )
+    
+    def forward(self, x):
+        size = x.shape[2:]
+        
+        # 1x1卷积
+        feat1 = self.conv1x1(x)
+        
+        # 膨胀卷积分支
+        aspp_feats = [branch(x) for branch in self.aspp_branches]
+        
+        # 全局池化分支
+        global_feat = self.global_pool(x)
+        global_feat = F.interpolate(global_feat, size=size, mode='bilinear', align_corners=False)
+        
+        # 拼接所有特征
+        all_feats = [feat1] + aspp_feats + [global_feat]
+        out = torch.cat(all_feats, dim=1)
+        
+        # 融合
+        out = self.fusion(out)
+        
+        return out
+
+
 class UpBlock(nn.Module):
     """
     Upsampling Block for decoder path
@@ -170,22 +286,34 @@ class ResidualIENet(nn.Module):
     - Output Head: 32->1 channel (sigmoid activation)
     - Residual Learning: Direct estimation of illumination residual
     """
-    def __init__(self):
+    def __init__(self, use_preact=False, use_aspp=False):
         super(ResidualIENet, self).__init__()
+        
+        self.use_aspp = use_aspp
+        
+        # 选择使用普通ResBlock还是PreActResBlock
+        ResBlockType = PreActResBlock if use_preact else ResBlock
         
         # Input layer
         self.input_layer = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         
-        # Encoder
-        self.enc1 = ResBlock(32, 64, stride=2)
-        self.enc2 = ResBlock(64, 128, stride=2)
-        self.enc3 = ResBlock(128, 256, stride=2)
+        # Encoder - 使用改进的残差块
+        self.enc1 = ResBlockType(32, 64, stride=2)
+        self.enc2 = ResBlockType(64, 128, stride=2)
+        self.enc3 = ResBlockType(128, 256, stride=2)
         
-        # Bottleneck
-        self.bottleneck = nn.Sequential(
-            ResBlock(256, 256),
-            ResBlock(256, 256)
-        )
+        # Bottleneck - 可选使用ASPP模块
+        if use_aspp:
+            self.bottleneck = nn.Sequential(
+                ResBlockType(256, 256),
+                ASPPModule(256, 256, dilations=[1, 6, 12, 18]),
+                ResBlockType(256, 256)
+            )
+        else:
+            self.bottleneck = nn.Sequential(
+                ResBlockType(256, 256),
+                ResBlockType(256, 256)
+            )
         
         # Decoder
         self.dec3 = UpBlock(256, 128)
@@ -244,9 +372,10 @@ class MultiScaleUP_Retinex(nn.Module):
     - Multi-Scale Enhancement: Combine enhancements from multiple scales
     - Output: Enhanced image Y
     """
-    def __init__(self):
+    def __init__(self, use_preact=True, use_aspp=True):
         super(MultiScaleUP_Retinex, self).__init__()
-        self.ie_net = ResidualIENet()
+        # 使用改进的IENet（预激活残差块 + ASPP模块）
+        self.ie_net = ResidualIENet(use_preact=use_preact, use_aspp=use_aspp)
         
         # Multi-scale feature extraction
         self.scale1 = nn.Sequential(
